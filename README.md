@@ -49,6 +49,34 @@ First start takes about a minute (database bootstrap + migrations). Then:
 | `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD` | — | Administrator created on first start (optional) |
 | `OFFICE_TAG` / `EAS_TAG` | `latest` | Image tags — pin to a release for reproducible updates |
 
+## HTTPS
+
+Two supported modes — both keep the ActiveSync endpoint working:
+
+**1. Behind an external reverse proxy (Traefik, Caddy, existing nginx, ...)**
+
+Terminate TLS externally and forward to `HTTP_PORT`. Only one setting is
+needed so the web client generates `https://` URLs:
+
+```dotenv
+TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```
+
+(Set it to the address of YOUR proxy — the default covers private networks.)
+
+**2. TLS termination in the nginx edge**
+
+```bash
+mkdir certs
+# put fullchain.pem + privkey.pem into ./certs
+cp nginx/https.conf.example nginx/https.conf
+```
+
+Uncomment the three commented blocks in `compose.yaml` (port 443, the
+`https.conf` mount and the `certs` mount), then `docker compose up -d`.
+Without certificates the edge runs HTTP-only — the TLS include is optional
+and does not block start-up.
+
 ## Updating
 
 ```bash

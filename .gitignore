@@ -1,3 +1,4 @@
 .env
 compose.override.yaml
-data/
+certs/
+nginx/https.conf

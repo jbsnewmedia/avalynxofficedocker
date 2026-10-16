@@ -5,8 +5,14 @@ services:
         image: nginx:1.29-alpine
         ports:
             - "${HTTP_PORT:-80}:80"
+            # Optional TLS termination in the edge: uncomment together with the
+            # two volumes below, provide the certificates and copy
+            # nginx/https.conf.example (see README).
+            # - "${HTTPS_PORT:-443}:443"
         volumes:
             - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+            # - ./nginx/https.conf:/etc/nginx/conf.d/https/https.conf:ro
+            # - ${TLS_CERT_DIR:-./certs}:/etc/nginx/certs:ro
         depends_on:
             office:
                 condition: service_healthy
@@ -23,6 +29,7 @@ services:
             DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}?serverVersion=18&charset=utf8
             OFFICE_ADMIN_EMAIL: ${OFFICE_ADMIN_EMAIL:-admin@example.com}
             OFFICE_ADMIN_PASSWORD: ${OFFICE_ADMIN_PASSWORD:-}
+            TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
             ATTACHMENT_STORAGE_DIR: data/attachments
             ATTACHMENT_STORAGE_SEGMENT_LENGTH: 3
             ATTACHMENT_STORAGE_SEGMENT_DEPTH: 3
