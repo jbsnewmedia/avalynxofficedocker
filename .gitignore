@@ -2,3 +2,8 @@
 compose.override.yaml
 certs/
 nginx/https.conf
+postgres-data/
+attachments/
+office-var/
+eas-state/
+eas-log/

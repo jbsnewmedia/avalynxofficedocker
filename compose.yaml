@@ -35,8 +35,8 @@ services:
             ATTACHMENT_STORAGE_SEGMENT_DEPTH: 3
             ATTACHMENT_STORAGE_MAX_BYTES: 65536
         volumes:
-            - attachments:/app/data/attachments
-            - office-var:/app/var
+            - ./attachments:/app/data/attachments
+            - ./office-var:/app/var
         healthcheck:
             # The entrypoint only exposes the web server after the database
             # bootstrap (migrations + admin user) has finished.
@@ -59,9 +59,9 @@ services:
             EAS_LOG_DIR: var/log/eas
             EAS_LOGLEVEL: 1
         volumes:
-            - attachments:/app/data/attachments
-            - eas-state:/app/var/eas-state
-            - eas-log:/app/var/log/eas
+            - ./attachments:/app/data/attachments
+            - ./eas-state:/app/var/eas-state
+            - ./eas-log:/app/var/log/eas
         depends_on:
             # The ActiveSync endpoint reads the tables created by the office
             # migrations, so it must not serve requests before the bootstrap.
@@ -78,17 +78,10 @@ services:
         volumes:
             # /var/lib/postgresql (not .../data): PostgreSQL 18 keeps its data
             # directory below this level, which also survives major upgrades.
-            - db-data:/var/lib/postgresql
+            - ./postgres-data:/var/lib/postgresql
         healthcheck:
             test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
             interval: 5s
             timeout: 5s
             retries: 20
         restart: unless-stopped
-
-volumes:
-    db-data:
-    attachments:
-    office-var:
-    eas-state:
-    eas-log:

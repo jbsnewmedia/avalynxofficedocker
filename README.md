@@ -30,8 +30,19 @@ cd avalynxofficedocker
 cp .env.example .env
 # edit .env: set POSTGRES_PASSWORD, APP_SECRET (openssl rand -hex 16)
 #            and OFFICE_ADMIN_PASSWORD
+
+# Create the local data directories and set the owners:
+#   uid 70  = postgres user of the alpine image
+#   uid 1000 = application user inside the office/eas containers
+mkdir -p postgres-data attachments office-var eas-state eas-log
+sudo chown 70:70 postgres-data
+sudo chown 1000:1000 attachments office-var eas-state eas-log
+
 docker compose up -d
 ```
+
+All state lives in these local directories (bind mounts), so upgrades are a
+simple image change and the data stays visible in the project folder.
 
 First start takes about a minute (database bootstrap + migrations). Then:
 
@@ -88,22 +99,27 @@ The office container applies new migrations automatically on start. Pin
 `OFFICE_TAG`/`EAS_TAG` to released versions before pulling to control the
 upgrade step.
 
-## Volumes & backup
+## Data directories & backup
 
-| Volume | Content |
+All persistent state is stored in bind-mounted local directories:
+
+| Directory | Content |
 |---|---|
-| `db-data` | PostgreSQL data (mail, calendar, contacts, users, licensing) |
-| `attachments` | Email attachments (shared by office + eas) |
-| `office-var` | Symfony cache/logs of the web client |
-| `eas-state` / `eas-log` | ActiveSync device state and logs |
+| `postgres-data/` | PostgreSQL data (mail, calendar, contacts, users, licensing) |
+| `attachments/` | Email attachments (shared by office + eas) |
+| `office-var/` | Symfony cache/logs of the web client |
+| `eas-state/` / `eas-log/` | ActiveSync device state and logs |
 
-Back up at least `db-data` and `attachments`:
+Back up at least `postgres-data/` and `attachments/` — best as a
+consistent dump while the stack runs:
 
 ```bash
 docker compose exec db pg_dump -U avalynxoffice avalynxoffice > backup.sql
-docker run --rm -v avalynxofficedocker_attachments:/data -v "$PWD":/backup alpine \
-    tar czf /backup/attachments.tar.gz -C /data .
+tar czf attachments.tar.gz -C attachments .
 ```
+
+Restoring on a fresh machine: stop the stack, copy the directories in,
+re-apply the ownerships from the quick start, start the stack.
 
 ## Mailboxes
 
