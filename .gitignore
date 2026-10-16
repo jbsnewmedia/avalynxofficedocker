@@ -1,4 +1,5 @@
 .env
+.idea/
 compose.override.yaml
 certs/
 nginx/https.conf
