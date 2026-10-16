@@ -44,6 +44,17 @@ docker compose up -d
 All state lives in these local directories (bind mounts), so upgrades are a
 simple image change and the data stays visible in the project folder.
 
+`compose.yaml` works standalone (`docker compose up -d` — compose reads
+`.env` automatically). The provided `core.sh` wraps the everyday commands:
+
+```bash
+./core.sh up              # start (also creates/fixes the data directories)
+./core.sh update          # pull latest images -> up (migrations run on start)
+./core.sh console app:mail:fetch --limit=10
+./core.sh backup          # pg_dump + attachments tar into the project dir
+./core.sh help
+```
+
 First start takes about a minute (database bootstrap + migrations). Then:
 
 - Web client: `http://<host>/` — log in with the `OFFICE_ADMIN_*` credentials
