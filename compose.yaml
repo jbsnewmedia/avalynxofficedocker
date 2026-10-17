@@ -57,7 +57,7 @@ services:
             ATTACHMENT_STORAGE_DIR: data/attachments
             EAS_STATE_DIR: var/eas-state
             EAS_LOG_DIR: var/log/eas
-            EAS_LOGLEVEL: 1
+            EAS_LOGLEVEL: ${EAS_LOGLEVEL:-1}
         volumes:
             - ./attachments:/app/data/attachments
             - ./eas-state:/app/var/eas-state
