@@ -69,6 +69,8 @@ First start takes about a minute (database bootstrap + migrations). Then:
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | — | Shared database credentials (password required) |
 | `APP_SECRET` | — | Symfony app secret of the web client (`openssl rand -hex 16`, required) |
 | `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD` | — | Administrator created on first start (optional) |
+| `NGINX_IMAGE` | `nginx:1.30-alpine` | Edge image override (floating stable line: picks up new 1.30.x on pull) |
+| `POSTGRES_IMAGE` | `postgres:18-alpine` | Database image override |
 | `OFFICE_TAG` / `EAS_TAG` | `latest` | Image tags — pin to a release for reproducible updates |
 
 ## HTTPS
