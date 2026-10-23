@@ -2,7 +2,7 @@ name: avalynxoffice
 
 services:
     nginx:
-        image: nginx:1.29-alpine
+        image: nginx:1.30-alpine
         ports:
             - "${HTTP_PORT:-80}:80"
             # Optional TLS termination in the edge: uncomment together with the

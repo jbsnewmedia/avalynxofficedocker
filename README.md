@@ -10,7 +10,7 @@ ActiveSync extension and PostgreSQL.
 
 | Service | Image | Purpose |
 |---|---|---|
-| `nginx` | `nginx:1.29-alpine` | Edge: web client on `/`, ActiveSync on `/Microsoft-Server-ActiveSync` |
+| `nginx` | `nginx:1.30-alpine` | Edge: web client on `/`, ActiveSync on `/Microsoft-Server-ActiveSync` |
 | `office` | `jbsnewmedia/avalynxoffice` | AvalynxOffice web client + mail engine |
 | `eas` | `jbsnewmedia/avalynxofficeeas` | ActiveSync (EAS) endpoint for iOS/Android/Outlook |
 | `db` | `postgres:18-alpine` | Shared PostgreSQL database |
