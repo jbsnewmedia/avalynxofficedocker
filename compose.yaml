@@ -20,7 +20,9 @@ services:
             office:
                 condition: service_healthy
             eas:
-                condition: service_started
+                condition: service_healthy
+        security_opt:
+            - no-new-privileges:true
         restart: unless-stopped
 
     office:
@@ -29,7 +31,11 @@ services:
             APP_ENV: prod
             APP_DEBUG: "0"
             APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env (openssl rand -hex 16)}
+            AVALYNXOFFICE_ENCRYPTION_KEY: ${AVALYNXOFFICE_ENCRYPTION_KEY:?set AVALYNXOFFICE_ENCRYPTION_KEY in .env (openssl rand -base64 32)}
             DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}?serverVersion=18&charset=utf8
+            # The entrypoint grants this role the least privileges the EAS
+            # service needs after every migration run.
+            EAS_DB_USER: ${EAS_DB_USER:-eas_user}
             OFFICE_ADMIN_EMAIL: ${OFFICE_ADMIN_EMAIL:-admin@example.com}
             OFFICE_ADMIN_PASSWORD: ${OFFICE_ADMIN_PASSWORD:-}
             TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.0.2}
@@ -51,12 +57,15 @@ services:
         depends_on:
             db:
                 condition: service_healthy
+        security_opt:
+            - no-new-privileges:true
         restart: unless-stopped
 
     eas:
         image: jbsnewmedia/avalynxofficeeas:${EAS_TAG:-latest}
         environment:
-            DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?serverVersion=18&charset=utf8
+            # Dedicated least-privilege role (see postgres/init/01-eas-role.sh).
+            DATABASE_URL: postgresql://${EAS_DB_USER:-eas_user}:${EAS_DB_PASSWORD:?set EAS_DB_PASSWORD in .env (openssl rand -hex 16)}@db:5432/${POSTGRES_DB}?serverVersion=18&charset=utf8
             ATTACHMENT_STORAGE_DIR: data/attachments
             EAS_STATE_DIR: var/eas-state
             EAS_LOG_DIR: var/log/eas
@@ -65,11 +74,21 @@ services:
             - ./attachments:/app/data/attachments
             - ./eas-state:/app/var/eas-state
             - ./eas-log:/app/var/log/eas
+        healthcheck:
+            # The ActiveSync endpoint answers unauthenticated requests with
+            # 401/405; any of those (or 200) proves the PHP stack is serving.
+            test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/Microsoft-Server-ActiveSync); case \"$$code\" in 200|401|405) exit 0;; *) exit 1;; esac"]
+            interval: 10s
+            timeout: 5s
+            retries: 12
+            start_period: 30s
         depends_on:
             # The ActiveSync endpoint reads the tables created by the office
             # migrations, so it must not serve requests before the bootstrap.
             office:
                 condition: service_healthy
+        security_opt:
+            - no-new-privileges:true
         restart: unless-stopped
 
     db:
@@ -78,10 +97,14 @@ services:
             POSTGRES_DB: ${POSTGRES_DB}
             POSTGRES_USER: ${POSTGRES_USER}
             POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+            EAS_DB_USER: ${EAS_DB_USER:-eas_user}
+            EAS_DB_PASSWORD: ${EAS_DB_PASSWORD}
         volumes:
             # /var/lib/postgresql (not .../data): PostgreSQL 18 keeps its data
             # directory below this level, which also survives major upgrades.
             - ./postgres-data:/var/lib/postgresql
+            # Runs only on a fresh volume: creates the EAS role.
+            - ./postgres/init:/docker-entrypoint-initdb.d:ro
         healthcheck:
             test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
             interval: 5s

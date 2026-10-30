@@ -16,20 +16,25 @@ ActiveSync extension and PostgreSQL.
 | `db` | `postgres:18-alpine` | Shared PostgreSQL database |
 
 The `office` container bootstraps itself on every start: it waits for the
-database, applies the migrations bundled with its image version and creates the
-env-defined administrator. The `eas` container maps onto the same schema (the
-schema is the interface) and therefore starts only after the office bootstrap
-is healthy. Attachments are stored in a shared volume mounted into both
-containers.
+database, applies the migrations bundled with its image version, grants the
+least-privilege EAS database role access to the tables it needs and creates
+the env-defined administrator. The `eas` container maps onto the same schema
+(the schema is the interface) with its own restricted database role and
+therefore starts only after the office bootstrap is healthy; nginx waits for
+both. Attachments are stored in a shared volume mounted into both containers.
+All application containers run with `no-new-privileges`.
 
 ## Quick start
 
 ```bash
 git clone https://github.com/jbsnewmedia/avalynxofficedocker.git
 cd avalynxofficedocker
-cp .env.example .env
-# edit .env: set POSTGRES_PASSWORD, APP_SECRET (openssl rand -hex 16)
-#            and OFFICE_ADMIN_PASSWORD
+# Creates .env from .env.example and generates APP_SECRET,
+# AVALYNXOFFICE_ENCRYPTION_KEY, POSTGRES_PASSWORD and EAS_DB_PASSWORD.
+# (Manual alternative: cp .env.example .env and fill in the values -
+#  APP_SECRET: openssl rand -hex 16, AVALYNXOFFICE_ENCRYPTION_KEY: openssl rand -base64 32)
+./core.sh init-env
+# edit .env: set OFFICE_ADMIN_EMAIL and OFFICE_ADMIN_PASSWORD
 
 # Create the local data directories and set the owners:
 #   uid 70  = postgres user of the alpine image
@@ -60,22 +65,66 @@ HTTP web client is for local-only setup; configure TLS before entering real
 credentials or exposing the stack publicly. ActiveSync redirects HTTP requests
 to HTTPS and is unavailable until TLS is configured.
 
+After the first successful start remove `OFFICE_ADMIN_PASSWORD` from `.env`
+(and `docker compose up -d` once more): the administrator already exists, the
+variable is only consumed by the bootstrap and otherwise just lingers in the
+container environment. The entrypoint unsets it before the web server starts
+and passes it to the console command via the environment, never on a command
+line.
+
+**Back up `AVALYNXOFFICE_ENCRYPTION_KEY` together with the database.** The
+key encrypts the stored mail account credentials; if it is lost, every saved
+mail password becomes unusable and has to be re-entered. Never regenerate it
+on an existing installation.
+
 - Local-only setup: `http://localhost/` — log in with the `OFFICE_ADMIN_*` credentials
 - Public web client after configuring TLS: `https://<host>/`
 - ActiveSync: server URL `https://<host>/Microsoft-Server-ActiveSync`,
-  user = a mailbox email address, password = the mailbox password
+  user = the AvalynxOffice login e-mail address, password = an **app password**
+  created in the web client under *Profile → App passwords* (the web login
+  password is not accepted on devices; app passwords can be revoked per device)
 
 ## Configuration (`.env`)
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `HTTP_PORT` | `80` | Host port of the nginx edge |
-| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | — | Shared database credentials (password required) |
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | — | Database owner credentials used by the office container (password required) |
+| `EAS_DB_USER` / `EAS_DB_PASSWORD` | `eas_user` / — | Least-privilege database role of the EAS container (password required, `openssl rand -hex 16`) — see below |
 | `APP_SECRET` | — | Symfony app secret of the web client (`openssl rand -hex 16`, required) |
-| `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD` | — | Administrator created on first start (optional) |
+| `AVALYNXOFFICE_ENCRYPTION_KEY` | — | Key for the encrypted mail account credentials (`openssl rand -base64 32`, required; back up with the database) |
+| `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD` | — | Administrator created on first start (optional; remove the password after the first start) |
 | `NGINX_IMAGE` | `nginx:1.30-alpine` | Edge image override (floating stable line: picks up new 1.30.x on pull) |
 | `POSTGRES_IMAGE` | `postgres:18-alpine` | Database image override |
 | `OFFICE_TAG` / `EAS_TAG` | `latest` | Image tags — pin to a release for reproducible updates |
+
+### EAS database role (least privilege)
+
+The ActiveSync container does not use the database owner. On the first start
+(fresh `postgres-data/`) `postgres/init/01-eas-role.sh` creates the login role
+`EAS_DB_USER` with `EAS_DB_PASSWORD`. Because the tables only exist after the
+office migrations, the office entrypoint (re-)applies the grants after every
+migration run: `SELECT` on all tables (also future ones via
+`ALTER DEFAULT PRIVILEGES`), `INSERT`/`UPDATE`/`DELETE` on the mail, contact and
+calendar tables, plus column-restricted updates on `account.inbox_folder_id`
+and `app_user.last_auth_at`. To re-apply the grants manually (same SQL,
+`postgres/eas-grants.sql`):
+
+```bash
+./core.sh grant-eas
+```
+
+If the role has to be created on an existing database (volume initialised
+before this stack version), run the `CREATE ROLE` from the init script once
+against the running database, then `./core.sh grant-eas`.
+
+### Edge hardening
+
+The nginx edge rate-limits `/login` (30 requests/minute per IP, burst 10,
+HTTP 429 beyond that) and caps `/Microsoft-Server-ActiveSync` at 20 concurrent
+connections per IP (ActiveSync clients poll often and hold long Ping requests,
+so no request-rate limit is applied there). Adjust the zones at the top of
+`nginx/nginx.conf` if needed.
 
 ## HTTPS
 
@@ -132,7 +181,9 @@ All persistent state is stored in bind-mounted local directories:
 | `eas-state/` / `eas-log/` | ActiveSync device state and logs |
 
 Back up at least `postgres-data/` and `attachments/` — best as a
-consistent dump while the stack runs:
+consistent dump while the stack runs — **and the `.env` file** (or at least
+`AVALYNXOFFICE_ENCRYPTION_KEY`): the database dump alone is useless for the
+stored mail credentials without the key.
 
 ```bash
 docker compose exec db pg_dump -U avalynxoffice avalynxoffice > backup.sql
@@ -140,7 +191,8 @@ tar czf attachments.tar.gz -C attachments .
 ```
 
 Restoring on a fresh machine: stop the stack, copy the directories in,
-re-apply the ownerships from the quick start, start the stack.
+re-apply the ownerships from the quick start, restore `.env` with the
+original `AVALYNXOFFICE_ENCRYPTION_KEY`, start the stack.
 
 ## Mailboxes
 

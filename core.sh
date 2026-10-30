@@ -2,6 +2,7 @@
 #
 # core.sh - control the avalynxoffice stack (office + eas + nginx + postgres).
 #
+#   ./core.sh init-env     create .env from .env.example with generated secrets
 #   ./core.sh up           start the stack (creates data dirs, fixes owners)
 #   ./core.sh down         stop & remove (data directories are kept)
 #   ./core.sh restart      down -> up
@@ -14,6 +15,7 @@
 #   ./core.sh exec -- CMD  run CMD inside the office container
 #   ./core.sh console CMD  run php bin/console CMD in the office container
 #   ./core.sh backup       pg_dump + attachments tar into the current directory
+#   ./core.sh grant-eas    (re-)apply the least-privilege grants for the EAS role
 #   ./core.sh ports        show port mappings
 #   ./core.sh help
 #
@@ -40,6 +42,9 @@ usage() {
 core.sh - control the avalynxoffice stack (office + eas + nginx + postgres:18)
 
 Commands:
+  init-env              create .env from .env.example and generate the secrets
+                        (APP_SECRET, AVALYNXOFFICE_ENCRYPTION_KEY, POSTGRES_PASSWORD,
+                        EAS_DB_PASSWORD); never overwrites an existing .env
   up                    create data dirs (fix owners via docker) -> up -d
   down                  stop & remove (local data directories are kept)
   restart               down -> up
@@ -52,6 +57,8 @@ Commands:
   exec -- CMD           run CMD in the office container
   console CMD           run php bin/console CMD in the office container
   backup                pg_dump + attachments tar into the current directory
+  grant-eas             (re-)apply the least-privilege grants for the EAS role
+                        (done automatically by the office entrypoint after migrations)
   ports                 show port mappings
   help                  this help
 EOF
@@ -75,8 +82,56 @@ check_env() {
     done <<'EOF'
 POSTGRES_PASSWORD
 APP_SECRET
+AVALYNXOFFICE_ENCRYPTION_KEY
+EAS_DB_PASSWORD
 EOF
     return "$missing"
+}
+
+# Read a variable from .env (last assignment wins, empty if absent).
+env_value() {
+    grep -E "^${1}=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
+# Create .env from .env.example and fill in the generated secrets. Existing
+# files are left untouched so a re-run can never destroy the encryption key.
+init_env() {
+    if [ -e .env ]; then
+        fail ".env already exists - refusing to overwrite it (secrets inside must not be regenerated)"
+        exit 1
+    fi
+    umask 077
+    cp .env.example .env
+    local app_secret enc_key pg_pw eas_pw
+    app_secret="$(openssl rand -hex 16)"
+    enc_key="$(openssl rand -base64 32)"
+    pg_pw="$(openssl rand -hex 16)"
+    eas_pw="$(openssl rand -hex 16)"
+    sed -i \
+        -e "s|^APP_SECRET=.*|APP_SECRET=${app_secret}|" \
+        -e "s|^AVALYNXOFFICE_ENCRYPTION_KEY=.*|AVALYNXOFFICE_ENCRYPTION_KEY=${enc_key}|" \
+        -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${pg_pw}|" \
+        -e "s|^EAS_DB_PASSWORD=.*|EAS_DB_PASSWORD=${eas_pw}|" \
+        .env
+    ok "created .env with generated APP_SECRET, AVALYNXOFFICE_ENCRYPTION_KEY, POSTGRES_PASSWORD, EAS_DB_PASSWORD"
+    warn "set OFFICE_ADMIN_EMAIL / OFFICE_ADMIN_PASSWORD in .env before the first start"
+    warn "back up AVALYNXOFFICE_ENCRYPTION_KEY together with the database - without it stored mail passwords are lost"
+}
+
+# Apply the EAS grants (postgres/eas-grants.sql) through psql in the db
+# container. The office entrypoint does the same on every start, this is the
+# manual fallback.
+grant_eas() {
+    local role
+    role="$(env_value EAS_DB_USER)"
+    role="${role:-eas_user}"
+    if ! printf '%s' "$role" | grep -Eq '^[a-z_][a-z0-9_]{0,62}$'; then
+        fail "EAS_DB_USER must match ^[a-z_][a-z0-9_]*$ (got: $role)"
+        exit 1
+    fi
+    docker compose exec -T db psql -v ON_ERROR_STOP=1 -v role="$role" \
+        -U "$(env_value POSTGRES_USER)" -d "$(env_value POSTGRES_DB)" < postgres/eas-grants.sql
+    ok "EAS grants applied for role $role"
 }
 
 # Bind-mount targets must exist before mounting (otherwise docker creates
@@ -108,6 +163,9 @@ ensure_host_dirs() {
 }
 
 case "${1:-help}" in
+    init-env|init)
+        init_env
+        ;;
     up|start)
         check_env || { fail "fix .env first"; exit 1; }
         ensure_host_dirs
@@ -171,6 +229,10 @@ case "${1:-help}" in
             "$(grep -E '^POSTGRES_DB=' .env | tail -1 | cut -d= -f2-)" > "${local_out}.sql"
         tar czf "${local_out}-attachments.tar.gz" -C attachments .
         ok "created ${local_out}.sql and ${local_out}-attachments.tar.gz"
+        warn "keep AVALYNXOFFICE_ENCRYPTION_KEY from .env together with this backup"
+        ;;
+    grant-eas)
+        grant_eas
         ;;
     ports)
         echo "HTTP:   localhost:${HTTP_PORT:-80}"

@@ -30,11 +30,23 @@ server {
     client_max_body_size 200m;
 
     # ActiveSync endpoint -> eas plugin container (separate AGPL project).
+    # Zone eas_conn is defined in nginx.conf (max. 20 connections per IP).
     location /Microsoft-Server-ActiveSync {
+        limit_conn eas_conn 20;
         proxy_pass http://eas:80;
         proxy_http_version 1.1;
         # ActiveSync Ping requests are long polls - do not cut them off.
         proxy_read_timeout 370s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Web login with rate limit (zone office_login from nginx.conf).
+    location = /login {
+        limit_req zone=office_login burst=10 nodelay;
+        proxy_pass http://office:80;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
