@@ -16,6 +16,7 @@
 #   ./core.sh console CMD  run php bin/console CMD in the office container
 #   ./core.sh backup       pg_dump + attachments tar into the current directory
 #   ./core.sh grant-eas    (re-)apply the least-privilege grants for the EAS role
+#   ./core.sh reset        down + wipe all data directories (fresh install; asks)
 #   ./core.sh ports        show port mappings
 #   ./core.sh help
 #
@@ -59,6 +60,9 @@ Commands:
   backup                pg_dump + attachments tar into the current directory
   grant-eas             (re-)apply the least-privilege grants for the EAS role
                         (done automatically by the office entrypoint after migrations)
+  reset [--yes]         stop the stack and DELETE postgres-data, attachments,
+                        office-var, eas-state, eas-log for a fresh installation
+                        (.env is kept; asks for confirmation unless --yes)
   ports                 show port mappings
   help                  this help
 EOF
@@ -68,6 +72,15 @@ EOF
 # compose.yaml, independent of the directory name).
 office_container() {
     docker compose ps -q office 2>/dev/null
+}
+
+# Data directories that make up an installation (bind mounts in compose.yaml).
+DATA_DIRS=(postgres-data attachments office-var eas-state eas-log)
+
+# A fresh installation has no initialized database yet: postgres-data is
+# missing or empty (the postgres image only initializes an empty directory).
+fresh_install() {
+    [ ! -d postgres-data ] || [ -z "$(ls -A postgres-data 2>/dev/null)" ]
 }
 
 check_env() {
@@ -117,12 +130,38 @@ EOF
                 ;;
         esac
     fi
+    # First start: without an administrator the stack comes up fine but nobody
+    # can log in. The password may come from .env or from the optional Compose
+    # secret file (OFFICE_ADMIN_PASSWORD_FILE, see compose.yaml). Existing
+    # installations may (and should) leave the password empty.
+    if fresh_install; then
+        local admin_pw admin_mail
+        admin_pw="$(env_value OFFICE_ADMIN_PASSWORD)"
+        admin_mail="$(env_value OFFICE_ADMIN_EMAIL)"
+        if [ -z "$admin_pw" ] && [ ! -s secrets/office_admin_password ]; then
+            fail "fresh installation (postgres-data is empty) but OFFICE_ADMIN_PASSWORD is not set in .env - no user could log in (alternatively provide secrets/office_admin_password, see README)"
+            missing=1
+        elif [ -n "$admin_pw" ] && [ "${#admin_pw}" -lt 8 ]; then
+            fail "OFFICE_ADMIN_PASSWORD is shorter than 8 characters"
+            missing=1
+        fi
+        if [ -z "$admin_mail" ] && [ ! -s secrets/office_admin_email ]; then
+            warn "OFFICE_ADMIN_EMAIL is not set - the administrator will be created as admin@example.com"
+        fi
+    fi
     return "$missing"
 }
 
-# Read a variable from .env (last assignment wins, empty if absent).
+# Read a variable from .env (last assignment wins, empty if absent). Surrounding
+# single/double quotes are stripped like docker compose does.
 env_value() {
-    grep -E "^${1}=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true
+    local raw
+    raw="$(grep -E "^${1}=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    case "$raw" in
+        \"*\") raw="${raw#\"}"; raw="${raw%\"}" ;;
+        \'*\') raw="${raw#\'}"; raw="${raw%\'}" ;;
+    esac
+    printf '%s' "$raw"
 }
 
 # Create .env from .env.example and fill in the generated secrets. Existing
@@ -177,7 +216,7 @@ grant_eas() {
 # The ownership fix runs through a throwaway alpine container so no sudo is
 # required on the host.
 ensure_host_dirs() {
-    local dirs=(postgres-data attachments office-var eas-state eas-log)
+    local dirs=("${DATA_DIRS[@]}")
     local d uid
     for d in "${dirs[@]}"; do
         mkdir -p "$d"
@@ -196,6 +235,50 @@ ensure_host_dirs() {
     if [ "$owner_fixed" = "1" ]; then
         ok "data directories created / ownership adjusted"
     fi
+}
+
+# Wipe an installation for a clean start: stops the stack and removes the
+# contents of all data directories (database, attachments, logs, EAS state).
+# The directories are owned by container uids (70/1000), so the deletion runs
+# through a throwaway alpine container instead of requiring sudo. .env (and
+# with it AVALYNXOFFICE_ENCRYPTION_KEY) is never touched.
+reset_data() {
+    local yes="${1:-}" d
+    local present=()
+    for d in "${DATA_DIRS[@]}"; do
+        [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ] && present+=("$d")
+    done
+    if [ "${#present[@]}" -eq 0 ]; then
+        ok "nothing to reset - all data directories are empty"
+        return 0
+    fi
+    printf "${BOLD}This DELETES all data of this installation in %s:${R}\n" "$ROOT"
+    for d in "${present[@]}"; do
+        printf '    - %s\n' "$d"
+    done
+    printf '  (database incl. users, accounts, mails, attachments, logs, EAS device state; .env is kept)\n'
+    if [ "$yes" != "--yes" ]; then
+        if [ ! -t 0 ]; then
+            fail "no terminal for confirmation - run ./core.sh reset --yes to skip the prompt"
+            exit 1
+        fi
+        local answer
+        read -r -p "  Type 'yes' to continue: " answer
+        if [ "$answer" != "yes" ]; then
+            warn "aborted, nothing deleted"
+            exit 1
+        fi
+    fi
+    docker compose down >/dev/null 2>&1 || true
+    local args=()
+    for d in "${present[@]}"; do
+        args+=("/mnt/$d")
+    done
+    # Delete the contents only (hidden files included); the directories
+    # themselves stay in place and get their owners fixed again on `up`.
+    docker run --rm -v "$ROOT":/mnt alpine sh -c 'for d in "$@"; do find "$d" -mindepth 1 -delete; done' _ "${args[@]}"
+    ok "data directories wiped: ${present[*]}"
+    warn "next ./core.sh up performs a fresh installation - make sure OFFICE_ADMIN_PASSWORD is set in .env"
 }
 
 case "${1:-help}" in
@@ -269,6 +352,9 @@ case "${1:-help}" in
         ;;
     grant-eas)
         grant_eas
+        ;;
+    reset)
+        reset_data "${2:-}"
         ;;
     ports)
         echo "HTTP:   localhost:${HTTP_PORT:-80}"

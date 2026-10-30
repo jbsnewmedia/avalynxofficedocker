@@ -38,15 +38,23 @@ cd avalynxofficedocker
 ./core.sh init-env
 # edit .env: set OFFICE_ADMIN_EMAIL and OFFICE_ADMIN_PASSWORD
 
-# Create the local data directories and set the owners:
-#   uid 70  = postgres user of the alpine image
-#   uid 1000 = application user inside the office/eas containers
-mkdir -p postgres-data attachments office-var eas-state eas-log
-sudo chown 70:70 postgres-data
-sudo chown 1000:1000 attachments office-var eas-state eas-log
-
-docker compose up -d
+# Checks .env, creates the local data directories with the right owners
+# (no sudo needed) and runs docker compose up -d.
+./core.sh up
 ```
+
+That is the whole installation: configure `.env`, `./core.sh up`, open
+`http://<host>/` and log in with `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD`.
+On a fresh installation (empty `postgres-data/`) `core.sh up` refuses to start
+without an administrator password, because the stack would come up without
+any user able to log in; on an existing installation the variable may stay
+empty.
+
+Without `core.sh` (plain `docker compose up -d`) create the data directories
+yourself: `mkdir -p postgres-data attachments office-var eas-state eas-log`,
+`sudo chown 70:70 postgres-data` (postgres user of the alpine image) and
+`sudo chown 1000:1000 attachments office-var eas-state eas-log` (application
+user inside the office/eas containers).
 
 All state lives in these local directories (bind mounts), so upgrades are a
 simple image change and the data stays visible in the project folder.
@@ -59,8 +67,14 @@ simple image change and the data stays visible in the project folder.
 ./core.sh update          # pull latest images -> up (migrations run on start)
 ./core.sh console app:mail:fetch --limit=10
 ./core.sh backup          # pg_dump + attachments tar into the project dir
+./core.sh reset           # stop + wipe all data directories for a fresh install (asks)
 ./core.sh help
 ```
+
+`reset` deletes the database, attachments, logs and the EAS device state of
+this installation (through a throwaway container, no sudo required) and keeps
+`.env`. Use it to start over, e.g. after experimenting with an older image
+version; add `--yes` to skip the confirmation prompt.
 
 First start takes about a minute (database bootstrap + migrations). The plain
 HTTP web client is for local-only setup; configure TLS before entering real
@@ -108,7 +122,7 @@ on an existing installation.
 | `EAS_DB_USER` / `EAS_DB_PASSWORD` | `eas_user` / — | Least-privilege database role of the EAS container (password required, `openssl rand -hex 16`) — see below |
 | `APP_SECRET` | — | Symfony app secret of the web client (`openssl rand -hex 16`, required, at least 16 characters) |
 | `AVALYNXOFFICE_ENCRYPTION_KEY` | — | Key for the encrypted mail account credentials (`openssl rand -base64 32`, required; back up with the database) |
-| `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD` | — | Administrator created on first start (optional; remove the password after the first start or use `OFFICE_ADMIN_PASSWORD_FILE` with a Compose secret) |
+| `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD` | — | Administrator created on first start (`core.sh up` requires the password on a fresh installation; remove it after the first start or use `OFFICE_ADMIN_PASSWORD_FILE` with a Compose secret) |
 | `NGINX_IMAGE` | `nginx:1.30-alpine` | Edge image override (floating stable line: picks up new 1.30.x on pull) |
 | `POSTGRES_IMAGE` | `postgres:18-alpine` | Database image override |
 | `OFFICE_TAG` / `EAS_TAG` | `latest` | Image tags — **pin to a released version in production** (e.g. `1.0.2`) so updates are a deliberate step instead of whatever `latest` currently points to |
