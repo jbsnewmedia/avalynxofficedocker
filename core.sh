@@ -71,10 +71,10 @@ office_container() {
 }
 
 check_env() {
-    local missing=0
+    local missing=0 key val
     while IFS='=' read -r key _; do
         [ -z "$key" ] && continue
-        val="$(grep -E "^${key}=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+        val="$(env_value "$key")"
         if [ -z "$val" ]; then
             fail "$key is not set in .env"
             missing=1
@@ -85,6 +85,38 @@ APP_SECRET
 AVALYNXOFFICE_ENCRYPTION_KEY
 EAS_DB_PASSWORD
 EOF
+    # Weak or placeholder secrets are rejected (N5): "change-me"-style values
+    # from examples and anything shorter than 16 characters.
+    for key in POSTGRES_PASSWORD EAS_DB_PASSWORD APP_SECRET; do
+        val="$(env_value "$key")"
+        [ -z "$val" ] && continue
+        case "$val" in
+            change-me|change_me|changeme|CHANGE-ME|CHANGE_ME|CHANGEME|password|secret)
+                fail "$key uses the placeholder value '$val' - generate a real secret (openssl rand -hex 16)"
+                missing=1
+                continue
+                ;;
+        esac
+        if [ "${#val}" -lt 16 ]; then
+            fail "$key is shorter than 16 characters - generate a real secret (openssl rand -hex 16)"
+            missing=1
+        fi
+    done
+    # TRUSTED_PROXIES must name the compose nginx only (fixed 172.30.0.2).
+    # Broad ranges let any container - or, behind an external proxy, any
+    # client - spoof X-Forwarded-* headers (client IP, https scheme).
+    local proxies
+    proxies="$(env_value TRUSTED_PROXIES)"
+    if [ -n "$proxies" ] && [ "$proxies" != "172.30.0.2" ]; then
+        case "$proxies" in
+            *"/8"*|*"/12"*|*"/16"*)
+                warn "TRUSTED_PROXIES='$proxies' contains a broad network range - use the fixed nginx address 172.30.0.2 (plus single external proxy addresses)"
+                ;;
+            *)
+                warn "TRUSTED_PROXIES='$proxies' differs from the compose nginx address 172.30.0.2 - make sure only real proxies are listed"
+                ;;
+        esac
+    fi
     return "$missing"
 }
 
@@ -118,9 +150,10 @@ init_env() {
     warn "back up AVALYNXOFFICE_ENCRYPTION_KEY together with the database - without it stored mail passwords are lost"
 }
 
-# Apply the EAS grants (postgres/eas-grants.sql) through psql in the db
-# container. The office entrypoint does the same on every start, this is the
-# manual fallback.
+# Apply the EAS grants through the office container: `office-grant-eas` runs
+# the same step as the entrypoint (single source of truth is eas-grants.sql
+# shipped in the office image). The entrypoint does this on every start, this
+# is the manual fallback.
 grant_eas() {
     local role
     role="$(env_value EAS_DB_USER)"
@@ -129,8 +162,11 @@ grant_eas() {
         fail "EAS_DB_USER must match ^[a-z_][a-z0-9_]*$ (got: $role)"
         exit 1
     fi
-    docker compose exec -T db psql -v ON_ERROR_STOP=1 -v role="$role" \
-        -U "$(env_value POSTGRES_USER)" -d "$(env_value POSTGRES_DB)" < postgres/eas-grants.sql
+    if [ -z "$(office_container)" ]; then
+        fail "office container is not running (./core.sh up)"
+        exit 1
+    fi
+    docker compose exec -T office office-grant-eas "$role"
     ok "EAS grants applied for role $role"
 }
 

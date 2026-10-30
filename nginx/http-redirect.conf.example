@@ -1,0 +1,38 @@
+# Port-80 server for TLS mode (HTTPS mode 2): redirect everything to HTTPS.
+#
+# Copy to nginx/http-redirect.conf and mount it to
+# /etc/nginx/conf.d/default.conf INSTEAD of nginx.conf (see compose.yaml).
+# The HTTPS server itself lives in nginx/https.conf (from
+# https.conf.example), included at the bottom of this file.
+#
+# Without TLS (plain HTTP or HTTPS mode 1) keep nginx.conf, which proxies the web client over
+# plain HTTP and only redirects the ActiveSync endpoint.
+server_tokens off;
+
+# Brute-force protection for the web login: 30 requests per minute and IP
+# (a short burst is queued, everything beyond that gets 429).
+limit_req_zone $binary_remote_addr zone=office_login:10m rate=30r/m;
+limit_req_status 429;
+# ActiveSync clients poll frequently and keep long Ping requests open, so no
+# request-rate limit here - only cap the concurrent connections per IP.
+limit_conn_zone $binary_remote_addr zone=eas_conn:10m;
+limit_conn_status 429;
+
+server {
+    listen 80 default_server;
+    # Recommended: set your real host name here (e.g. office.example.com)
+    # and redirect to it explicitly (return 308 https://office.example.com$request_uri)
+    # so that arbitrary Host headers from clients are not echoed into the
+    # Location header. $host is kept as the portable default.
+    server_name _;
+
+    # ActiveSync uses Basic authentication and the web login carries the
+    # password, so nothing is served over plain HTTP: 308 keeps method and
+    # body (ActiveSync POSTs).
+    return 308 https://$host$request_uri;
+}
+
+# nginx/https.conf is mounted into /etc/nginx/conf.d/https/ via compose. A
+# glob include that matches nothing is not an error (but then no HTTPS server
+# exists and every request ends in a redirect loop - check the mount).
+include /etc/nginx/conf.d/https/*.conf;

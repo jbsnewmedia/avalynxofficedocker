@@ -22,7 +22,9 @@ the env-defined administrator. The `eas` container maps onto the same schema
 (the schema is the interface) with its own restricted database role and
 therefore starts only after the office bootstrap is healthy; nginx waits for
 both. Attachments are stored in a shared volume mounted into both containers.
-All application containers run with `no-new-privileges`.
+All containers run with `no-new-privileges`, drop every Linux capability
+except the few their entrypoints need (`cap_drop: ALL` + minimal `cap_add`)
+and are confined by memory and process-count limits (see *Resource limits*).
 
 ## Quick start
 
@@ -68,9 +70,19 @@ to HTTPS and is unavailable until TLS is configured.
 After the first successful start remove `OFFICE_ADMIN_PASSWORD` from `.env`
 (and `docker compose up -d` once more): the administrator already exists, the
 variable is only consumed by the bootstrap and otherwise just lingers in the
-container environment. The entrypoint unsets it before the web server starts
-and passes it to the console command via the environment, never on a command
+container environment (the entrypoint logs a warning on every start while it
+is still set). The entrypoint unsets it before the web server starts and
+passes it to the console command via the environment, never on a command
 line.
+
+Alternative without a plain-text value in `.env`: a Compose secret. Put the
+password into a file (e.g. `./secrets/office_admin_password`, `chmod 600`),
+uncomment the `secrets:` blocks in `compose.yaml` (service level + top level)
+and set `OFFICE_ADMIN_PASSWORD_FILE: /run/secrets/office_admin_password` in
+the `office` environment while leaving `OFFICE_ADMIN_PASSWORD` empty. The
+entrypoint reads `OFFICE_ADMIN_PASSWORD_FILE` / `OFFICE_ADMIN_EMAIL_FILE`
+and refuses to start when both the plain variable and the `_FILE` variant are
+set.
 
 **Back up `AVALYNXOFFICE_ENCRYPTION_KEY` together with the database.** The
 key encrypts the stored mail account credentials; if it is lost, every saved
@@ -89,14 +101,21 @@ on an existing installation.
 | Variable | Default | Meaning |
 |---|---|---|
 | `HTTP_PORT` | `80` | Host port of the nginx edge |
-| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | — | Database owner credentials used by the office container (password required) |
+| `HTTP_BIND` / `HTTPS_BIND` | `0.0.0.0` | Bind address of the published ports; `127.0.0.1` behind an external reverse proxy on the same host (HTTPS mode 1) |
+| `HTTPS_PORT` | `443` | Host port for TLS in the edge (HTTPS mode 2, only when enabled in `compose.yaml`) |
+| `TRUSTED_PROXIES` | `172.30.0.2` | Proxy addresses the office container trusts for `X-Forwarded-*`; keep the fixed edge address (`core.sh up` warns about other values or broad ranges) |
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | — | Database owner credentials used by the office container (password required, at least 16 characters, no placeholder) |
 | `EAS_DB_USER` / `EAS_DB_PASSWORD` | `eas_user` / — | Least-privilege database role of the EAS container (password required, `openssl rand -hex 16`) — see below |
-| `APP_SECRET` | — | Symfony app secret of the web client (`openssl rand -hex 16`, required) |
+| `APP_SECRET` | — | Symfony app secret of the web client (`openssl rand -hex 16`, required, at least 16 characters) |
 | `AVALYNXOFFICE_ENCRYPTION_KEY` | — | Key for the encrypted mail account credentials (`openssl rand -base64 32`, required; back up with the database) |
-| `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD` | — | Administrator created on first start (optional; remove the password after the first start) |
+| `OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD` | — | Administrator created on first start (optional; remove the password after the first start or use `OFFICE_ADMIN_PASSWORD_FILE` with a Compose secret) |
 | `NGINX_IMAGE` | `nginx:1.30-alpine` | Edge image override (floating stable line: picks up new 1.30.x on pull) |
 | `POSTGRES_IMAGE` | `postgres:18-alpine` | Database image override |
-| `OFFICE_TAG` / `EAS_TAG` | `latest` | Image tags — pin to a release for reproducible updates |
+| `OFFICE_TAG` / `EAS_TAG` | `latest` | Image tags — **pin to a released version in production** (e.g. `1.0.2`) so updates are a deliberate step instead of whatever `latest` currently points to |
+| `NGINX_MEM_LIMIT` / `NGINX_PIDS_LIMIT` | `128m` / `256` | Memory and process limits of the nginx edge |
+| `OFFICE_MEM_LIMIT` / `OFFICE_PIDS_LIMIT` | `1g` / `256` | Memory and process limits of the office container |
+| `EAS_MEM_LIMIT` / `EAS_PIDS_LIMIT` | `512m` / `256` | Memory and process limits of the EAS container |
+| `DB_MEM_LIMIT` / `DB_PIDS_LIMIT` | `1g` / `512` | Memory and process limits of PostgreSQL |
 
 ### EAS database role (least privilege)
 
@@ -104,14 +123,28 @@ The ActiveSync container does not use the database owner. On the first start
 (fresh `postgres-data/`) `postgres/init/01-eas-role.sh` creates the login role
 `EAS_DB_USER` with `EAS_DB_PASSWORD`. Because the tables only exist after the
 office migrations, the office entrypoint (re-)applies the grants after every
-migration run: `SELECT` on all tables (also future ones via
-`ALTER DEFAULT PRIVILEGES`), `INSERT`/`UPDATE`/`DELETE` on the mail, contact and
-calendar tables, plus column-restricted updates on `account.inbox_folder_id`
-and `app_user.last_auth_at`. To re-apply the grants manually (same SQL,
-`postgres/eas-grants.sql`):
+migration run. The grants are explicit (no `ALL TABLES`, no default
+privileges, no sequences — all keys are UUIDs):
+
+- `SELECT` on `account`, `user_account`, `license_state`,
+  `app_user_app_password`;
+- `SELECT` on the columns `id`, `email`, `roles`, `active`, `last_auth_at`,
+  `created_at`, `updated_at` of `app_user` — the web login password hash is
+  not readable by the EAS role (devices authenticate with app passwords);
+- `SELECT`/`INSERT`/`UPDATE`/`DELETE` on the mail, contact and calendar
+  tables (`email*`, `body`, `attachment`, `address`, `account_address`,
+  `folder`, `account_folder`, `calendar_event`);
+- column-restricted `UPDATE` on `account.inbox_folder_id`,
+  `app_user.last_auth_at` and `app_user_app_password.last_used_at`.
+
+Blanket grants of earlier stack versions are revoked by the same script, so
+an update tightens existing installations automatically. The SQL lives in the
+office image (`docker/prod/eas-grants.sql` in the AvalynxOffice repository,
+single source of truth) and is applied by `office-grant-eas` inside the
+container. To re-apply it manually (office container must be running):
 
 ```bash
-./core.sh grant-eas
+./core.sh grant-eas          # = docker compose exec office office-grant-eas
 ```
 
 If the role has to be created on an existing database (volume initialised
@@ -126,6 +159,37 @@ connections per IP (ActiveSync clients poll often and hold long Ping requests,
 so no request-rate limit is applied there). Adjust the zones at the top of
 `nginx/nginx.conf` if needed.
 
+Both limits key on the client address as seen by the Compose nginx. In HTTPS
+mode 1 (external reverse proxy) that address is always the proxy, so the
+limits would throttle the proxy instead of individual clients — see the notes
+in that section.
+
+Request bodies are capped at 64 MB (`client_max_body_size 64m` in
+`nginx/nginx.conf` and `nginx/https.conf.example`). This is a generous upper
+bound above the application limits: the office container caps stored
+attachments via `ATTACHMENT_STORAGE_MAX_BYTES` (64 KB in `compose.yaml`), the
+EAS container defaults to 25 MB. If you raise the application limit, raise
+the nginx value accordingly — it is a plain config value, not an `.env`
+variable.
+
+### Resource limits
+
+Every container has a memory and a process-count (`pids`) limit, set via
+`deploy.resources.limits` (honoured by `docker compose` v2+ without Swarm).
+The defaults suit a small installation; override them in `.env`
+(`NGINX_MEM_LIMIT`, `OFFICE_MEM_LIMIT`, `EAS_MEM_LIMIT`, `DB_MEM_LIMIT` and
+the matching `*_PIDS_LIMIT`). A container that exceeds its memory limit is
+OOM-killed and restarted by Docker (`restart: unless-stopped`); check
+`docker stats` and raise the limit if that happens under normal load.
+
+All containers additionally start with `cap_drop: ALL` and only the
+capabilities their entrypoints need to fix volume ownership, bind port 80 and
+switch to the unprivileged service user (`CHOWN`, `SETUID`, `SETGID`,
+`NET_BIND_SERVICE`, plus `DAC_OVERRIDE`/`FOWNER` for the webdevops based
+application images and PostgreSQL). Dynamic container addresses are taken
+from `172.30.0.128/25`, so the fixed edge address `172.30.0.2` used as the
+default `TRUSTED_PROXIES` is never handed to another container.
+
 ## HTTPS
 
 Two supported modes — both keep the ActiveSync endpoint working:
@@ -134,15 +198,32 @@ Two supported modes — both keep the ActiveSync endpoint working:
 
 Terminate TLS externally and connect the proxy directly to the `office` and
 `eas` services on the Compose network. Configure the proxy to overwrite—not
-append or pass through—`X-Forwarded-For`, `X-Real-IP` and `X-Forwarded-Proto`.
-Set `TRUSTED_PROXIES` to the exact proxy IP (or a narrowly scoped subnet):
+append or pass through—`X-Forwarded-For`, `X-Real-IP` and `X-Forwarded-Proto`
+(`https`). Set `TRUSTED_PROXIES` to the exact proxy IP (or a narrowly scoped
+subnet):
 
 ```dotenv
 TRUSTED_PROXIES=172.30.0.10
 ```
 
-Do not trust broad private ranges. The Compose nginx edge is fixed at
-`172.30.0.2`; it overwrites forwarded headers and is the default trusted proxy.
+Do not trust broad private ranges (`/8`, `/12`, `/16`); `core.sh up` warns
+about them. The Compose nginx edge is fixed at `172.30.0.2`; it overwrites
+forwarded headers and is the default trusted proxy.
+
+In this mode the Compose nginx should **not** sit between the external proxy
+and the applications: its rate limits and connection caps key on the client
+address, which would always be the external proxy, and it overwrites
+`X-Forwarded-For`/`X-Real-IP` with that address, so the applications would
+never see the real client IP (audit finding M-1). Either point the external
+proxy at `office:80` / `eas:80` directly, or — if the Compose nginx has to
+stay in the chain — enable the commented `set_real_ip_from` block in
+`nginx/nginx.conf` for the single proxy address and add that address to
+`TRUSTED_PROXIES`. In both cases bind the published port to the loopback
+interface so the plain-HTTP edge is not reachable from the network:
+
+```dotenv
+HTTP_BIND=127.0.0.1
+```
 
 **2. TLS termination in the nginx edge**
 
@@ -150,13 +231,28 @@ Do not trust broad private ranges. The Compose nginx edge is fixed at
 mkdir certs
 # put fullchain.pem + privkey.pem into ./certs
 cp nginx/https.conf.example nginx/https.conf
+cp nginx/http-redirect.conf.example nginx/http-redirect.conf
 ```
 
-Uncomment the three commented blocks in `compose.yaml` (port 443, the
-`https.conf` mount and the `certs` mount), then `docker compose up -d`.
-With this configuration the edge redirects all HTTP requests to HTTPS. Until
-TLS is configured, HTTP-only access is local-testing-only and must not be used
-for real mail credentials or publicly exposed ActiveSync.
+In `compose.yaml` uncomment the port 443 line, the `https.conf` mount and the
+`certs` mount, and **replace** the `nginx.conf` mount by the
+`http-redirect.conf` mount (both are mounted as `default.conf`), then
+`docker compose up -d`.
+
+- `https.conf` contains only the port 443 server: TLS 1.2/1.3 with the
+  Mozilla *intermediate* cipher list, session cache without tickets, OCSP
+  stapling, `Strict-Transport-Security` (1 year, `includeSubDomains`) and
+  `X-Content-Type-Options: nosniff` on server level.
+- `http-redirect.conf` provides the port 80 server, which redirects every
+  request (not only ActiveSync) with `308` to `https://$host$request_uri`,
+  plus the shared rate-limit zones. Keeping `nginx.conf` instead would still
+  proxy the web client over plain HTTP.
+- Recommended: replace `server_name _` in both files with your host name and
+  redirect to that fixed name instead of `$host`, so client-supplied `Host`
+  headers are not echoed into the `Location` header.
+
+Until TLS is configured, HTTP-only access is local-testing-only and must not
+be used for real mail credentials or publicly exposed ActiveSync.
 
 ## Updating
 
