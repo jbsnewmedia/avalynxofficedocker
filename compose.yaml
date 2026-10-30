@@ -3,6 +3,9 @@ name: avalynxoffice
 services:
     nginx:
         image: ${NGINX_IMAGE:-nginx:1.30-alpine}
+        networks:
+            default:
+                ipv4_address: 172.30.0.2
         ports:
             - "${HTTP_PORT:-80}:80"
             # Optional TLS termination in the edge: uncomment together with the
@@ -29,7 +32,7 @@ services:
             DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}?serverVersion=18&charset=utf8
             OFFICE_ADMIN_EMAIL: ${OFFICE_ADMIN_EMAIL:-admin@example.com}
             OFFICE_ADMIN_PASSWORD: ${OFFICE_ADMIN_PASSWORD:-}
-            TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+            TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.0.2}
             ATTACHMENT_STORAGE_DIR: data/attachments
             ATTACHMENT_STORAGE_SEGMENT_LENGTH: 3
             ATTACHMENT_STORAGE_SEGMENT_DEPTH: 3
@@ -85,3 +88,9 @@ services:
             timeout: 5s
             retries: 20
         restart: unless-stopped
+
+networks:
+    default:
+        ipam:
+            config:
+                - subnet: 172.30.0.0/24

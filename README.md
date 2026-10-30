@@ -55,10 +55,14 @@ simple image change and the data stays visible in the project folder.
 ./core.sh help
 ```
 
-First start takes about a minute (database bootstrap + migrations). Then:
+First start takes about a minute (database bootstrap + migrations). The plain
+HTTP web client is for local-only setup; configure TLS before entering real
+credentials or exposing the stack publicly. ActiveSync redirects HTTP requests
+to HTTPS and is unavailable until TLS is configured.
 
-- Web client: `http://<host>/` — log in with the `OFFICE_ADMIN_*` credentials
-- ActiveSync: server URL `http://<host>/Microsoft-Server-ActiveSync`,
+- Local-only setup: `http://localhost/` — log in with the `OFFICE_ADMIN_*` credentials
+- Public web client after configuring TLS: `https://<host>/`
+- ActiveSync: server URL `https://<host>/Microsoft-Server-ActiveSync`,
   user = a mailbox email address, password = the mailbox password
 
 ## Configuration (`.env`)
@@ -79,14 +83,17 @@ Two supported modes — both keep the ActiveSync endpoint working:
 
 **1. Behind an external reverse proxy (Traefik, Caddy, existing nginx, ...)**
 
-Terminate TLS externally and forward to `HTTP_PORT`. Only one setting is
-needed so the web client generates `https://` URLs:
+Terminate TLS externally and connect the proxy directly to the `office` and
+`eas` services on the Compose network. Configure the proxy to overwrite—not
+append or pass through—`X-Forwarded-For`, `X-Real-IP` and `X-Forwarded-Proto`.
+Set `TRUSTED_PROXIES` to the exact proxy IP (or a narrowly scoped subnet):
 
 ```dotenv
-TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+TRUSTED_PROXIES=172.30.0.10
 ```
 
-(Set it to the address of YOUR proxy — the default covers private networks.)
+Do not trust broad private ranges. The Compose nginx edge is fixed at
+`172.30.0.2`; it overwrites forwarded headers and is the default trusted proxy.
 
 **2. TLS termination in the nginx edge**
 
@@ -98,8 +105,9 @@ cp nginx/https.conf.example nginx/https.conf
 
 Uncomment the three commented blocks in `compose.yaml` (port 443, the
 `https.conf` mount and the `certs` mount), then `docker compose up -d`.
-Without certificates the edge runs HTTP-only — the TLS include is optional
-and does not block start-up.
+With this configuration the edge redirects all HTTP requests to HTTPS. Until
+TLS is configured, HTTP-only access is local-testing-only and must not be used
+for real mail credentials or publicly exposed ActiveSync.
 
 ## Updating
 

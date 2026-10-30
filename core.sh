@@ -166,6 +166,7 @@ case "${1:-help}" in
         ;;
     backup)
         local_out="office-backup-$(date +%Y%m%d-%H%M%S)"
+        umask 077
         docker compose exec -T db pg_dump -U "$(grep -E '^POSTGRES_USER=' .env | tail -1 | cut -d= -f2-)" \
             "$(grep -E '^POSTGRES_DB=' .env | tail -1 | cut -d= -f2-)" > "${local_out}.sql"
         tar czf "${local_out}-attachments.tar.gz" -C attachments .

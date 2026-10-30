@@ -7,11 +7,22 @@
 #
 # The web client then generates https:// URLs as soon as TRUSTED_PROXIES is
 # set for the office container (see .env.example / README).
+# Once enabled, HTTP requests are redirected to HTTPS. Do not expose the HTTP
+# port directly for ActiveSync: Basic authentication carries mailbox passwords.
+
+server {
+    listen 80 default_server;
+    server_name _;
+    server_tokens off;
+
+    return 308 https://$host$request_uri;
+}
 
 server {
     listen 443 ssl;
     http2 on;
     server_name _;
+    server_tokens off;
 
     ssl_certificate     /etc/nginx/certs/fullchain.pem;
     ssl_certificate_key /etc/nginx/certs/privkey.pem;
@@ -26,7 +37,7 @@ server {
         proxy_read_timeout 370s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
@@ -35,7 +46,7 @@ server {
         proxy_pass http://office:80;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
