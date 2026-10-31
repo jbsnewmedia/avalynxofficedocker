@@ -3,7 +3,7 @@
 All-in-one Docker Compose stack for
 [AvalynxOffice](https://github.com/jbsnewmedia/avalynxoffice) — the self-hosted
 mail office with web client, calendar, contacts and licensing — plus the
-[avalynxofficeeas](https://github.com/jbsnewmedia/avalynxofficeeas)
+[AvalynxOfficeEAS](https://github.com/jbsnewmedia/avalynxofficeeas)
 ActiveSync extension and PostgreSQL.
 
 ## Services
