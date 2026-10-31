@@ -111,6 +111,10 @@ services:
         environment:
             # Dedicated least-privilege role (see postgres/init/01-eas-role.sh).
             DATABASE_URL: postgresql://${EAS_DB_USER:-eas_user}:${EAS_DB_PASSWORD:?set EAS_DB_PASSWORD in .env (openssl rand -hex 16)}@db:5432/${POSTGRES_DB}?serverVersion=18&charset=utf8
+            # Only requests from these addresses (the stack's fixed nginx IP)
+            # may carry a trusted X-Real-IP header for the auth throttle and
+            # the auth-failure log; everything else uses the socket address.
+            EAS_TRUSTED_PROXIES: ${EAS_TRUSTED_PROXIES:-172.30.0.2}
             ATTACHMENT_STORAGE_DIR: data/attachments
             EAS_STATE_DIR: var/eas-state
             EAS_LOG_DIR: var/log/eas

@@ -9,3 +9,9 @@ office-var/
 eas-state/
 eas-log/
 office-backup-*
+
+# Compose secrets (siehe compose.yaml / README) - niemals committen
+secrets/
+# SQL-Dumps niemals committen
+*.sql
+postgres-data-dev/
