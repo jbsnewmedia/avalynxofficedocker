@@ -115,18 +115,18 @@ EOF
             missing=1
         fi
     done
-    # TRUSTED_PROXIES must name the compose nginx only (fixed 172.30.0.2).
+    # TRUSTED_PROXIES must name the compose nginx only (fixed 172.30.3.2).
     # Broad ranges let any container - or, behind an external proxy, any
     # client - spoof X-Forwarded-* headers (client IP, https scheme).
     local proxies
     proxies="$(env_value TRUSTED_PROXIES)"
-    if [ -n "$proxies" ] && [ "$proxies" != "172.30.0.2" ]; then
+    if [ -n "$proxies" ] && [ "$proxies" != "172.30.3.2" ]; then
         case "$proxies" in
             *"/8"*|*"/12"*|*"/16"*)
-                warn "TRUSTED_PROXIES='$proxies' contains a broad network range - use the fixed nginx address 172.30.0.2 (plus single external proxy addresses)"
+                warn "TRUSTED_PROXIES='$proxies' contains a broad network range - use the fixed nginx address 172.30.3.2 (plus single external proxy addresses)"
                 ;;
             *)
-                warn "TRUSTED_PROXIES='$proxies' differs from the compose nginx address 172.30.0.2 - make sure only real proxies are listed"
+                warn "TRUSTED_PROXIES='$proxies' differs from the compose nginx address 172.30.3.2 - make sure only real proxies are listed"
                 ;;
         esac
     fi

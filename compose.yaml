@@ -5,7 +5,7 @@ services:
         image: ${NGINX_IMAGE:-nginx:1.30-alpine}
         networks:
             default:
-                ipv4_address: 172.30.0.2
+                ipv4_address: 172.30.3.2
         ports:
             # HTTP_BIND: bind address of the published port. HTTPS mode 1 (behind an
             # external reverse proxy on the same host) → HTTP_BIND=127.0.0.1 so
@@ -65,7 +65,7 @@ services:
             # the *_FILE variable, leave OFFICE_ADMIN_PASSWORD empty and
             # uncomment the `secrets:` entries here and at the top level.
             # OFFICE_ADMIN_PASSWORD_FILE: /run/secrets/office_admin_password
-            TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.0.2}
+            TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.3.2}
             ATTACHMENT_STORAGE_DIR: data/attachments
             ATTACHMENT_STORAGE_SEGMENT_LENGTH: 3
             ATTACHMENT_STORAGE_SEGMENT_DEPTH: 3
@@ -114,7 +114,7 @@ services:
             # Only requests from these addresses (the stack's fixed nginx IP)
             # may carry a trusted X-Real-IP header for the auth throttle and
             # the auth-failure log; everything else uses the socket address.
-            EAS_TRUSTED_PROXIES: ${EAS_TRUSTED_PROXIES:-172.30.0.2}
+            EAS_TRUSTED_PROXIES: ${EAS_TRUSTED_PROXIES:-172.30.3.2}
             ATTACHMENT_STORAGE_DIR: data/attachments
             EAS_STATE_DIR: var/eas-state
             EAS_LOG_DIR: var/log/eas
@@ -204,8 +204,8 @@ networks:
     default:
         ipam:
             config:
-                - subnet: 172.30.0.0/24
+                - subnet: 172.30.3.0/24
                   # Dynamic addresses (db/office/eas) come from the upper half
-                  # so the fixed nginx address 172.30.0.2 (TRUSTED_PROXIES)
+                  # so the fixed nginx address 172.30.3.2 (TRUSTED_PROXIES)
                   # is never taken by a container that starts earlier.
-                  ip_range: 172.30.0.128/25
+                  ip_range: 172.30.3.128/25
